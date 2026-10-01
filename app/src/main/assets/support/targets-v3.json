@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 3,
+  "payloads": [
+    {
+      "payloadId": "r0q-S9010ZCSBGZH3",
+      "displayName": "Galaxy S22 (SM-S9010) | Kernel 5.10.236 | bundled",
+      "models": ["SM-S9010"],
+      "kernelVersions": ["5.10.236"],
+      "exploit": {
+        "url": "asset:payloads/cve-2026-43499-app.so",
+        "size": 104128
+      },
+      "kernelsu": {
+        "url": "asset:payloads/ksud-samsung-android12-5.10-kdp",
+        "size": 6649032
+      }
+    }
+  ]
+}

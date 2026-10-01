@@ -332,8 +332,6 @@ private fun RootApp(
             }
         }
     }
-    LaunchedEffect(Unit) { checkForUpdate() }
-
     if (showTargetPicker) {
         TargetSelectionSheet(
             device = device,
