@@ -86,7 +86,6 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
     private var installJob: Job? = null
     private var activeHistoryEntry: InstallHistoryEntry? = null
 
-    @Volatile
     val state: StateFlow<InstallUiState> = mutableState.asStateFlow()
     val history: StateFlow<List<InstallHistoryEntry>> = mutableHistory.asStateFlow()
     val targetCatalog: StateFlow<TargetCatalogUiState> = mutableTargetCatalog.asStateFlow()
