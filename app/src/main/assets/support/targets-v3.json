@@ -8,11 +8,19 @@
       "kernelVersions": ["5.10.236"],
       "exploit": {
         "url": "asset:payloads/cve-2026-43499-app.so",
-        "size": 104128
+        "size": 1754608
       },
       "kernelsu": {
-        "url": "asset:payloads/ksud-samsung-android12-5.10-kdp",
-        "size": 6649032
+        "url": "asset:payloads/kernelsu-samsung-5.10-c12nolto.ko",
+        "size": 5277472
+      },
+      "helper": {
+        "url": "asset:payloads/cve-2026-43499-root",
+        "size": 14224
+      },
+      "ksuloader": {
+        "url": "asset:payloads/ksu-load.so",
+        "size": 14752
       }
     }
   ]

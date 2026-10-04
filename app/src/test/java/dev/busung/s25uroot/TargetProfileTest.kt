@@ -12,6 +12,8 @@ class TargetProfileTest {
         kernelVersions = setOf("6.6.98"),
         exploit = RemoteArtifact("https://example.invalid/exploit", 1),
         kernelSu = RemoteArtifact("https://example.invalid/ksud", 1),
+        helper = RemoteArtifact("https://example.invalid/helper", 1),
+        ksuLoader = RemoteArtifact("https://example.invalid/loader", 1),
     )
 
     @Test

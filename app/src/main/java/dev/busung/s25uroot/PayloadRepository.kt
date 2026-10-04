@@ -9,6 +9,8 @@ data class VerifiedPayloads(
     val profile: TargetProfile,
     val exploit: File,
     val kernelSu: File,
+    val helper: File,
+    val ksuLoader: File,
 )
 
 /**
@@ -44,13 +46,27 @@ class PayloadRepository(private val context: Context) {
         )
         val kernelSu = stageAsset(
             profile.kernelSu,
-            File(directory, "ksud-s25u-kdp"),
+            File(directory, "kernelsu-samsung-5.10-c12nolto.ko"),
+            context.getString(R.string.artifact_kernelsu),
+            onProgress,
+        )
+        val helper = stageAsset(
+            profile.helper,
+            File(directory, "cve-2026-43499-root"),
+            context.getString(R.string.artifact_exploit),
+            onProgress,
+        )
+        val ksuLoader = stageAsset(
+            profile.ksuLoader,
+            File(directory, "ksu-load.so"),
             context.getString(R.string.artifact_kernelsu),
             onProgress,
         )
         Os.chmod(exploit.absolutePath, 0b100100100)
         Os.chmod(kernelSu.absolutePath, 0b100100100)
-        return VerifiedPayloads(profile, exploit, kernelSu)
+        Os.chmod(helper.absolutePath, 0b111101101)
+        Os.chmod(ksuLoader.absolutePath, 0b100100100)
+        return VerifiedPayloads(profile, exploit, kernelSu, helper, ksuLoader)
     }
 
     private fun stageAsset(
