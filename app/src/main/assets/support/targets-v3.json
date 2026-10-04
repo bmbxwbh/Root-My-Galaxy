@@ -8,7 +8,7 @@
       "kernelVersions": ["5.10.236"],
       "exploit": {
         "url": "asset:payloads/cve-2026-43499-app.so",
-        "size": 1754600
+        "size": 1754648
       },
       "kernelsu": {
         "url": "asset:payloads/kernelsu-samsung-5.10-c12nolto.ko",

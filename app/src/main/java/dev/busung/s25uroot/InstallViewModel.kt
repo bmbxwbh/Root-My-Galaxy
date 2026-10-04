@@ -203,6 +203,28 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private suspend fun executeExploit(payloads: VerifiedPayloads) {
+        // Shizuku processes outlive this client: a cancelled or stalled run
+        // leaves its supervisor/attempt children alive, and the next run
+        // races their poisoned misc.fops tables (kernel panic through a
+        // recycled fops table). Sweep orphans; cve43499-hold keepers are
+        // exempt — they only pin pages and keep those tables safely zeroed.
+        val sweepScript = listOf(
+            "for e in /proc/[0-9]*/environ; do",
+            "  grep -q RECLAIM_ABSORB_MAX_PAGES \"$e\" 2>/dev/null || continue",
+            "  p=${'$'}{e#/proc/}; p=${'$'}{p%/environ}",
+            "  comm=$(cat \"/proc/$p/comm\" 2>/dev/null) || continue",
+            "  [ \"$comm\" = \"cve43499-hold\" ] && continue",
+            "  kill -9 \"$p\" 2>/dev/null",
+            "done",
+            "for c in /proc/[0-9]*/cmdline; do",
+            "  grep -q cve-2026-43499-root \"$c\" 2>/dev/null || continue",
+            "  p=${'$'}{c#/proc/}; p=${'$'}{p%/cmdline}",
+            "  [ \"$p\" = ${'$'}${'$'} ] && continue",
+            "  kill -9 \"$p\" 2>/dev/null",
+            "done",
+            "exit 0",
+        ).joinToString("\n")
+        ShizukuController.exec(arrayOf("/system/bin/sh", "-c", sweepScript)).waitFor()
         // The payload's UMH root stage execs this exact path
         // (ROOT_UMH_PATH in target.h) — stage our root client there.
         shizukuStage(payloads.helper, SHIZUKU_ROOT_CLIENT_PATH, "755")
